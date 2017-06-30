@@ -8,14 +8,16 @@ import matplotlib.colors as mpl_colors
 # Reference points for different spectra
 ref_points = OrderedDict([
     ('water', (105, 40)),
-    ('dirt', (84, 102)),
+    #('dirt', (84, 102)),
+    ('dirt', (43, 23)),
     ('grass', (104, 105)),
     ('roof', (68, 170)),
     ('concrete', (94, 170)),
     ('trees', (187, 95)),
-    #('road', (76, 86)),
-    ('road', (113, 196)),
-    ('shadow', (18, 160))
+    ('road', (76, 86)),
+    #('road', (113, 196)),
+    #('shadow', (18, 160))
+    ('shadow', (20, 142))
 ])
 
 # Color associated with each reference object
@@ -93,7 +95,7 @@ def init_nmf(data, img_shape, points, spec):
 
     for idx, (obj,(x,y)) in enumerate(points.items()):
         A0[:, idx] = spec[obj]
-        S0[idx, y*img_shape[0]+x] = 1
+        S0[idx, y*img_shape[1]+x] = 1
     return A0, S0
 
 def plot_spectra(wavelength, A, points, figsize=(12,8), ax=None, show=True):
