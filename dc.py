@@ -9,10 +9,12 @@ import matplotlib.colors as mpl_colors
 ref_points = OrderedDict([
     ('water', (105, 40)),
     #('dirt', (84, 102)),
-    ('dirt', (43, 23)),
+    #('dirt', (43, 23)),
+    ('dirt', (145, 21)),
     ('grass', (104, 105)),
     ('roof', (68, 170)),
-    ('concrete', (94, 170)),
+    #('concrete', (94, 170)),
+    ('concrete', (105, 23)),
     ('trees', (187, 95)),
     ('road', (76, 86)),
     #('road', (113, 196)),
@@ -87,15 +89,28 @@ def prox_ones(X, step):
     """
     return np.ones_like(X)
 
-def init_nmf(data, img_shape, points, spec):
+def init_nmf(data, img_shape, points, spec, use_bkg=False):
     """Initialize A0 and S0 using the reference points
     """
-    A0 = np.zeros((data.shape[0], len(points)))
-    S0 = np.zeros((len(points), img_shape[0]*img_shape[1]))
+    K = len(points)
+    # Optionally add an extra component for the background
+    if use_bkg:
+        K += 1
+    A0 = np.zeros((data.shape[0], K))
+    S0 = np.zeros((K, img_shape[0]*img_shape[1]))
 
+    # Create A0 and S0 from the spectral data at certain pixels
     for idx, (obj,(x,y)) in enumerate(points.items()):
         A0[:, idx] = spec[obj]
         S0[idx, y*img_shape[1]+x] = 1
+
+    # Optionally initialize the background
+    if use_bkg:
+        bkgA = np.mean(data, axis=1)
+        bkgS = np.empty((S0.shape[1],))
+        bkgS[:] = np.mean(bkgA)
+        A0[:,-1] = bkgA/np.sum(bkgA)
+        S0[-1,:] = bkgS
     return A0, S0
 
 def plot_spectra(wavelength, A, points, figsize=(12,8), ax=None, show=True):
