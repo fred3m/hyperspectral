@@ -1,9 +1,11 @@
 from collections import OrderedDict
+from functools import partial
 
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as mpl_colors
+import proxmin
 
 # Reference points for different spectra
 ref_points = OrderedDict([
@@ -14,7 +16,8 @@ ref_points = OrderedDict([
     ('grass', (104, 105)),
     ('roof', (68, 170)),
     #('concrete', (94, 170)),
-    ('concrete', (105, 23)),
+    #('concrete', (105, 23)),
+    ('concrete', (102, 128)),
     ('trees', (187, 95)),
     ('road', (76, 86)),
     #('road', (113, 196)),
@@ -22,15 +25,27 @@ ref_points = OrderedDict([
     ('shadow', (20, 142))
 ])
 
+monument_points = OrderedDict([
+    ("concrete", (162, 507)), # statue
+        #("tar", (175, 546)), # road, degenerate with concrete
+        #("roof2", (114, 575)), # roof, degenerate with dirt
+        ("dirt", (172, 597)), # dirt
+        ("grass", (125, 575)), #grass
+        #("trees", (183, 561)), #tree
+        ("bkg", (None,None)
+    )
+])
+
 # Color associated with each reference object
 ref_colors = {
     'water': '#0000ff',
     'grass': '#00ff00',
     'roof': '#07afc1',
+    'roof2': '#bf4101',
     'concrete': '#e0e0e0',
     'dirt': '#7c600b',
     'trees': '#2c702c',
-    'road': '#424242',
+    'bkg': '#000000',
     'shadow': '#000000'
 }
 
@@ -89,28 +104,62 @@ def prox_ones(X, step):
     """
     return np.ones_like(X)
 
-def init_nmf(data, img_shape, points, spec, use_bkg=False):
+def prox_bkg(X, step, bidx=-1):
+    """Use a constant background
+    """
+    X[bidx] = np.mean(X[bidx])
+    return X
+
+def prox_bkg_plus(X, step, bidx=-1):
+    """Set one component to be a flat background
+    """
+    X = prox_bkg(X, step, bidx)
+    X = proxmin.operators.prox_plus(X, step)
+    return X
+
+def init_nmf(img, img_shape, points=None, spec=None, s_iter=4, show=True, bidx=None, features=None):
     """Initialize A0 and S0 using the reference points
     """
-    K = len(points)
-    # Optionally add an extra component for the background
-    if use_bkg:
-        K += 1
-    A0 = np.zeros((data.shape[0], K))
-    S0 = np.zeros((K, img_shape[0]*img_shape[1]))
+    # Set the proximal operator for the S update
+    if bidx is not None:
+        prox_g = partial(prox_bkg_plus, bidx=bidx)
+    else:
+        prox_g = proxmin.operators.prox_plus
 
-    # Create A0 and S0 from the spectral data at certain pixels
-    for idx, (obj,(x,y)) in enumerate(points.items()):
-        A0[:, idx] = spec[obj]
-        S0[idx, y*img_shape[1]+x] = 1
+    if points is not None and spec is not None:
+        features = len(points)
+        A0 = np.zeros((img.shape[0], features))
+        S0 = np.zeros((features, img_shape[0]*img_shape[1]))
 
-    # Optionally initialize the background
-    if use_bkg:
-        bkgA = np.mean(data, axis=1)
-        bkgS = np.empty((S0.shape[1],))
-        bkgS[:] = np.mean(bkgA)
-        A0[:,-1] = bkgA/np.sum(bkgA)
-        S0[-1,:] = bkgS
+        # Use the reference points to initialize A
+        for idx, (obj,(x,y)) in enumerate(points.items()):
+            A0[:, idx] = spec[obj]
+    elif features is None:
+        raise Exception("Must either supply 'points; and 'spec' or 'features' to initialize A")
+    else:
+        A0 = np.random.rand(img.shape[0], features)
+        S0 = np.zeros((features, img_shape[0]*img_shape[1]))
+
+    # Normalize A0
+    norm = np.sum(A0, axis=0)
+    A0 = A0/norm
+
+    # Initialize S0 by performing a few proximal updates
+    step = .5/proxmin.utils.get_spectral_norm(A0)
+    for n in range(4):
+        S0 = proxmin.nmf.prox_likelihood_S(S0, step, A0, img, prox_g)
+    
+    # Plot the initial Spectra
+    if show and points is not None:
+        for idx, (obj,(x,y)) in enumerate(points.items()):
+            plt.plot(A0[:, idx], label=obj)
+        plt.legend()
+        plt.show()
+        for idx, (obj, pt) in enumerate(points.items()):
+            plt.imshow(S0[idx].reshape(img_shape), cmap="Greys_r")
+            plt.title(obj)
+            plt.colorbar()
+            plt.show()
     return A0, S0
 
 def plot_spectra(wavelength, A, points, figsize=(12,8), ax=None, show=True):
@@ -137,7 +186,8 @@ def plot_single_object(data, Ak, Sk, img_shape, spectra, figsize=(16,8),
     
     # Continuus image
     ax1 = fig.add_subplot(2,2,1)
-    ax1.set_title("Intensity", color=color)
+    if obj is not None:
+        ax1.set_title(obj, color=color)
     img = Sk.reshape(img_shape)
     img_plot = ax1.imshow(img, cmap="Greys_r")
     fig.colorbar(img_plot, ax=ax1)
@@ -195,16 +245,11 @@ def plot_likelihood(S, img_shape, points, ax=None, figsize=(12,10), colors=None,
 
     if colors is None:
         colors = ref_colors
-    cmaplist = [
-        (int('0x'+colors[obj][1:3], 16),
-         int('0x'+colors[obj][3:5], 16),
-         int('0x'+colors[obj][5:7], 16))
-        for obj in list(points.keys())]
     cmaplist = [colors[obj] for obj in list(points.keys())]
     cmap = mpl_colors.ListedColormap(cmaplist)
 
     Smax = np.argmax(S, axis=0)
-    img = ax.imshow(Smax.reshape(img_shape), cmap=cmap)
+    img = ax.imshow(Smax.reshape(img_shape), cmap=cmap, vmin=0, vmax=len(list(points.keys()))-1)
 
     if fig is not None:
         cbar = fig.colorbar(img, ax=ax)
@@ -213,7 +258,7 @@ def plot_likelihood(S, img_shape, points, ax=None, figsize=(12,10), colors=None,
     if show:
         plt.show()
 
-def compare_likelihood(data, img_shape, S, points, figsize=(12,6)):
+def compare_likelihood(data, img_shape, S, points, figsize=(12,6), colors=None):
     """Plot the likelihood and color image side by side
     """
     fig = plt.figure(figsize=figsize)
@@ -221,5 +266,5 @@ def compare_likelihood(data, img_shape, S, points, figsize=(12,6)):
     plot_color_img(data, img_shape, ax=ax1, show=False)
     
     ax2 = fig.add_subplot(1,2,2)
-    plot_likelihood(S, img_shape, points, ax=ax2, fig=fig)
+    plot_likelihood(S, img_shape, points, ax=ax2, fig=fig, colors=colors)
     plt.show()
